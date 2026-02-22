@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+VERSION="2.0.0"
 VERBOSE=0
-VERSION="1.0.0"
 
 usage() {
-    cat <<EOF
-tbw - calculate Terabytes Written (TBW) from SMART data
+cat <<EOF
+tbw - Calculate SSD Terabytes Written (TBW) from SMART data
 
 Usage:
   tbw [options] <device>
@@ -18,20 +18,84 @@ Options:
 
 Examples:
   sudo tbw sda
-  sudo tbw -v /dev/nvme0n1
+  sudo tbw /dev/nvme0n1
+  sudo tbw -v sda
 EOF
 }
 
-# Handle long options first
+die() {
+    echo "Error: $*" >&2
+    exit 1
+}
+
+require_root() {
+    [[ $EUID -eq 0 ]] || die "Run as root (sudo)."
+}
+
+require_smartctl() {
+    command -v smartctl >/dev/null 2>&1 || \
+        die "smartctl not found. Install smartmontools."
+}
+
+normalize_device() {
+    local input="$1"
+    [[ "$input" == /dev/* ]] && echo "$input" || echo "/dev/$input"
+}
+
+get_smart_output() {
+    smartctl -a "$1" 2>/dev/null || \
+        die "Failed to read SMART data from $1"
+}
+
+detect_type() {
+    if grep -qi "NVMe" <<< "$1"; then
+        echo "NVMe"
+    else
+        echo "SATA"
+    fi
+}
+
+parse_nvme_bytes() {
+    local smart="$1"
+
+    local units
+    units=$(awk -F: '/Data Units Written/ {gsub(/[, ]/,"",$2); print $2; exit}' <<< "$smart")
+
+    [[ -n "$units" ]] || die "Could not read NVMe 'Data Units Written'"
+
+    # 1 data unit = 1000 * 512 bytes (per NVMe spec)
+    echo $(( units * 512000 ))
+}
+
+parse_sata_bytes() {
+    local smart="$1"
+
+    local sector_size
+    sector_size=$(awk '/Sector Size/ {
+        for (i=1;i<=NF;i++)
+            if ($i ~ /^[0-9]+$/) { print $i; exit }
+    }' <<< "$smart")
+
+    local lbas
+    lbas=$(awk '/Total_LBAs_Written/ {print $NF; exit}' <<< "$smart")
+
+    [[ -n "$sector_size" ]] || die "Could not determine sector size"
+    [[ -n "$lbas" ]] || die "Could not determine Total_LBAs_Written"
+
+    echo $(( lbas * sector_size ))
+}
+
+bytes_to_tb() {
+    awk -v bytes="$1" 'BEGIN {printf "%.2f", bytes/1000000000000}'
+}
+
+# -----------------------
+# Option handling
+# -----------------------
+
 case "${1:-}" in
-    --help)
-        usage
-        exit 0
-        ;;
-    --version)
-        echo "tbw $VERSION"
-        exit 0
-        ;;
+    --help) usage; exit 0 ;;
+    --version) echo "tbw $VERSION"; exit 0 ;;
 esac
 
 while getopts "vhV" opt; do
@@ -44,45 +108,37 @@ while getopts "vhV" opt; do
 done
 shift $((OPTIND - 1))
 
-[[ -z "$1" ]] && { echo "Usage: $0 [-v] <device>" >&2; exit 1; }
-[[ $EUID -ne 0 ]] && { echo "Run as root" >&2; exit 1; }
+[[ -n "${1:-}" ]] || { usage >&2; exit 1; }
 
-[[ "$1" == /dev/* ]] && DEVICE="$1" || DEVICE="/dev/$1"
-[[ -b "$DEVICE" ]] || { echo "Device not found: $DEVICE" >&2; exit 1; }
+# -----------------------
+# Validation
+# -----------------------
 
-SMART=$(smartctl -a "$DEVICE")
+require_root
+require_smartctl
 
-# ---- NVMe ----
-if echo "$SMART" | grep -q "NVMe"; then
-    TYPE="NVMe"
-    DATA_UNITS=$(echo "$SMART" | awk '/Data Units Written/ {print $4}' | tr -d ',')
-    [[ -z "$DATA_UNITS" ]] && { echo "Could not read NVMe writes" >&2; exit 1; }
-    BYTES=$((DATA_UNITS * 512000))
+DEVICE=$(normalize_device "$1")
+[[ -b "$DEVICE" ]] || die "Device not found: $DEVICE"
 
-# ---- SATA ----
+SMART=$(get_smart_output "$DEVICE")
+TYPE=$(detect_type "$SMART")
+
+if [[ "$TYPE" == "NVMe" ]]; then
+    BYTES=$(parse_nvme_bytes "$SMART")
 else
-    TYPE="SATA"
-
-    SECTOR_SIZE=$(echo "$SMART" | grep "Sector Size" | grep -o '[0-9]\+' | head -1)
-
-    LBAS=$(echo "$SMART" | awk '/Total_LBAs_Written/ {print $NF}')
-
-    [[ -z "$SECTOR_SIZE" || -z "$LBAS" ]] && {
-        echo "Could not determine SATA write data" >&2
-        exit 1
-    }
-
-    BYTES=$((LBAS * SECTOR_SIZE))
+    BYTES=$(parse_sata_bytes "$SMART")
 fi
 
-TB=$(awk "BEGIN {printf \"%.2f\", $BYTES/1000000000000}")
+TB=$(bytes_to_tb "$BYTES")
+
+# -----------------------
+# Output
+# -----------------------
 
 if [[ $VERBOSE -eq 1 ]]; then
     echo "Drive: $DEVICE"
     echo "Type: $TYPE"
-    [[ "$TYPE" == "SATA" ]] && echo "Sector size: $SECTOR_SIZE bytes"
-    [[ "$TYPE" == "SATA" ]] && echo "LBAs written: $LBAS"
-    [[ "$TYPE" == "NVMe" ]] && echo "Data units written: $DATA_UNITS"
+    echo "Bytes written: $BYTES"
     echo "Terabytes written: $TB TB"
 else
     echo "$TB"
