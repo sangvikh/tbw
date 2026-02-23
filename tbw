@@ -65,7 +65,7 @@ parse_nvme_bytes() {
     [[ -n "$units" ]] || \
         die "Could not parse NVMe Data Units Written"
 
-    echo $(( units * 512000 ))
+    awk -v u="$units" 'BEGIN {printf "%.0f\n", u * 512000}'
 }
 
 parse_sata_bytes() {
