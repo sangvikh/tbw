@@ -119,7 +119,7 @@ require_root
 require_smartctl
 
 DEVICE=$(normalize_device "$1")
-[[ -b "$DEVICE" ]] || die "Device not found: $DEVICE"
+[[ -e "$DEVICE" ]] || die "Device not found: $DEVICE"
 
 SMART=$(get_smart_output "$DEVICE")
 TYPE=$(detect_type "$SMART")
