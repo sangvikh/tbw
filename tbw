@@ -49,23 +49,21 @@ get_smart_json() {
 
 calculate_tb() {
     jq -r '
-    . as $root
-
-    | def nvme_tb:
-        $root.nvme_smart_health_information_log.data_units_written?
+    def nvme_tb:
+        .nvme_smart_health_information_log.data_units_written?
         | select(. != null)
         | (. * 512000) / 1e12;
 
     def sata_tb:
         (
-            $root.ata_smart_attributes.table[]?
+            .ata_smart_attributes.table[]?
             | select(.id == 241 or .id == 242)
             | .raw.value
         ) as $lbas
-        | select($lbas != null and $root.logical_block_size != null)
-        | ($lbas * $root.logical_block_size) / 1e12;
+        | select($lbas != null and .logical_block_size != null)
+        | ($lbas * .logical_block_size) / 1e12;
 
-    if $root.device.protocol == "NVMe" then
+    if .device.protocol == "NVMe" then
         nvme_tb
     else
         sata_tb
