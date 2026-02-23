@@ -13,6 +13,7 @@ for scripting, monitoring, and logging SSD write life.
 -   Supports SATA (`Total_LBAs_Written`) and NVMe (`data_units_written`)
 -   Reads SMART data via `smartctl -a -j`
 -   Optional `--bytes` mode for raw numeric bytes (script-friendly)
+-   Optional `-v` verbose mode for human-friendly output (device, type, bytes, TB)  
 -   Minimal dependencies (`smartctl`, `jq`)
 -   Requires root privileges (run with `sudo`)
 -   Follows Unix philosophy: single responsibility, composable, minimal interface
@@ -78,10 +79,6 @@ Output:
 
     37415580000000
 
-Multiple devices:
-
-    sudo ./tbw sda nvme0n1
-
 Verbose mode:
 
     sudo ./tbw -v sda
@@ -92,6 +89,10 @@ Example verbose output:
     Type: SATA
     Bytes written: 37408157962240
     Terabytes written: 37.41 TB
+
+Multiple devices:
+
+    sudo ./tbw sda nvme0n1
 
 ------------------------------------------------------------------------
 
@@ -110,6 +111,31 @@ Scan all drives:
     lsblk -ndo NAME,TYPE | awk '$2=="disk"{print $1}' | while read d; do
         sudo ./tbw "$d"
     done
+
+------------------------------------------------------------------------
+
+## Installation
+
+1. Copy the script to `/usr/local/bin`:
+
+    ```
+    sudo cp tbw /usr/local/bin/
+    sudo chmod +x /usr/local/bin/tbw
+    ```
+2. Add a man page (optional, see below) for `man tbw` support.
+
+------------------------------------------------------------------------
+
+### Man Page (Optional)
+
+Install the man page:
+
+    sudo cp tbw.1 /usr/local/share/man/man1/
+    sudo mandb
+
+Test:
+
+    man tbw
 
 ------------------------------------------------------------------------
 
