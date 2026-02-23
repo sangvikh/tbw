@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="2.0.0"
+VERSION="3.0.0"
 VERBOSE=0
 
 usage() {
@@ -32,9 +32,9 @@ require_root() {
     [[ $EUID -eq 0 ]] || die "Run as root (sudo)."
 }
 
-require_smartctl() {
-    command -v smartctl >/dev/null 2>&1 || \
-        die "smartctl not found. Install smartmontools."
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || \
+        die "$1 not found. Please install it."
 }
 
 normalize_device() {
@@ -42,64 +42,57 @@ normalize_device() {
     [[ "$input" == /dev/* ]] && echo "$input" || echo "/dev/$input"
 }
 
-get_smart_output() {
-    smartctl -a "$1" 2>&1 || true
+get_smart_json() {
+    smartctl -a -j "$1" 2>/dev/null || \
+        die "Failed to read SMART data from $1"
 }
 
-detect_type() {
-    if grep -qi "NVMe" <<< "$1"; then
-        echo "NVMe"
+calculate_tb() {
+    jq -r '
+    def nvme_tb:
+        .nvme_smart_health_information_log.data_units_written?
+        | select(. != null)
+        | (. * 512000) / 1e12;
+
+    def sata_tb:
+        (
+            .ata_smart_attributes.table[]?
+            | select(.name == "Total_LBAs_Written")
+            | .raw.value
+        ) as $lbas
+        | select($lbas != null and .logical_block_size != null)
+        | ($lbas * .logical_block_size) / 1e12;
+
+    if .device.protocol == "NVMe" then
+        nvme_tb
     else
-        echo "SATA"
-    fi
+        sata_tb
+    end
+    | select(. != null)
+    | (. * 100 | round) / 100
+    ' <<< "$1"
 }
 
-parse_nvme_bytes() {
-    local smart="$1"
-
-    local units
-    units=$(awk '
-        /Data Units Written/ {
-            # Everything after the colon
-            sub(/.*:/, "", $0)
-
-            # Remove bracket part
-            sub(/\[.*/, "", $0)
-
-            # Remove all spaces
-            gsub(/[[:space:]]/, "", $0)
-
-            print
-            exit
-        }
-    ' <<< "$smart")
-
-    [[ "$units" =~ ^[0-9]+$ ]] || \
-        die "Could not parse NVMe Data Units Written"
-
-    awk -v u="$units" 'BEGIN {printf "%.0f\n", u * 512000}'
+get_bytes_written() {
+    jq -r '
+    if .device.protocol == "NVMe" then
+        .nvme_smart_health_information_log.data_units_written?
+        | select(. != null)
+        | . * 512000
+    else
+        (
+            .ata_smart_attributes.table[]?
+            | select(.name == "Total_LBAs_Written")
+            | .raw.value
+        ) as $lbas
+        | select($lbas != null and .logical_block_size != null)
+        | $lbas * .logical_block_size
+    end
+    ' <<< "$1"
 }
 
-parse_sata_bytes() {
-    local smart="$1"
-
-    local sector_size
-    sector_size=$(awk '/Sector Size/ {
-        for (i=1;i<=NF;i++)
-            if ($i ~ /^[0-9]+$/) { print $i; exit }
-    }' <<< "$smart")
-
-    local lbas
-    lbas=$(awk '/Total_LBAs_Written/ {print $NF; exit}' <<< "$smart")
-
-    [[ -n "$sector_size" ]] || die "Could not determine sector size"
-    [[ -n "$lbas" ]] || die "Could not determine Total_LBAs_Written"
-
-    echo $(( lbas * sector_size ))
-}
-
-bytes_to_tb() {
-    awk -v bytes="$1" 'BEGIN {printf "%.2f", bytes/1000000000000}'
+get_type() {
+    jq -r '.device.protocol' <<< "$1"
 }
 
 # -----------------------
@@ -128,27 +121,25 @@ shift $((OPTIND - 1))
 # -----------------------
 
 require_root
-require_smartctl
+require_command smartctl
+require_command jq
 
 DEVICE=$(normalize_device "$1")
 [[ -e "$DEVICE" ]] || die "Device not found: $DEVICE"
 
-SMART=$(get_smart_output "$DEVICE")
-TYPE=$(detect_type "$SMART")
+SMART_JSON=$(get_smart_json "$DEVICE")
 
-if [[ "$TYPE" == "NVMe" ]]; then
-    BYTES=$(parse_nvme_bytes "$SMART")
-else
-    BYTES=$(parse_sata_bytes "$SMART")
-fi
-
-TB=$(bytes_to_tb "$BYTES")
+TB=$(calculate_tb "$SMART_JSON") || true
+[[ -n "$TB" ]] || die "Could not determine TBW for $DEVICE"
 
 # -----------------------
 # Output
 # -----------------------
 
 if [[ $VERBOSE -eq 1 ]]; then
+    TYPE=$(get_type "$SMART_JSON")
+    BYTES=$(get_bytes_written "$SMART_JSON")
+
     echo "Drive: $DEVICE"
     echo "Type: $TYPE"
     echo "Bytes written: $BYTES"
