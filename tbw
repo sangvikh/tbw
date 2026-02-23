@@ -1,27 +1,45 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="3.0.0"
+VERSION="4.0.0"
+
+# -----------------------
+# Defaults
+# -----------------------
+
 VERBOSE=0
+OUTPUT_MODE="tb"   # tb | bytes | json
+ROUND=1            # 1 = round to 2 decimals, 0 = exact
+
+# -----------------------
+# Usage
+# -----------------------
 
 usage() {
 cat <<EOF
-tbw - Calculate SSD Terabytes Written (TBW) from SMART data
+tbw - Extract total bytes written (TBW) from SSD SMART data
 
 Usage:
-  tbw [options] <device>
+  tbw [options] <device> [device...]
 
 Options:
-  -v            Verbose output
+  -v            Verbose output (human readable)
+  --bytes       Output raw bytes written
+  --json        JSON output
+  --exact       Do not round TB output
   -h, --help    Show this help
   -V, --version Show version
 
 Examples:
   sudo tbw sda
-  sudo tbw /dev/nvme0n1
-  sudo tbw -v sda
+  sudo tbw --bytes /dev/nvme0n1
+  sudo tbw --json sda nvme0n1
 EOF
 }
+
+# -----------------------
+# Errors / helpers
+# -----------------------
 
 die() {
     echo "Error: $*" >&2
@@ -38,82 +56,78 @@ require_command() {
 }
 
 normalize_device() {
-    local input="$1"
-    [[ "$input" == /dev/* ]] && echo "$input" || echo "/dev/$input"
+    [[ "$1" == /dev/* ]] && echo "$1" || echo "/dev/$1"
 }
+
+# -----------------------
+# SMART handling
+# -----------------------
 
 get_smart_json() {
-    smartctl -a -j "$1" 2>/dev/null || true
+    local output
+    output=$(smartctl -a -j "$1" 2>/dev/null) || true
+    [[ -n "$output" ]] || return 1
+    echo "$output"
 }
 
-calculate_tb() {
-    jq -r '
-    def nvme_tb:
+extract_bytes() {
+jq -r '
+    def nvme_bytes:
         .nvme_smart_health_information_log.data_units_written?
         | select(. != null)
-        | (. * 512000) / 1e12;
+        | . * 512000;
 
-    def sata_tb:
-        (
-            .ata_smart_attributes.table[]?
-            | select(.id == 241 or .id == 242)
+    def sata_bytes:
+        . as $root
+        | (
+            $root.ata_smart_attributes.table[]?
+            | select(.name == "Total_LBAs_Written" or .id == 241)
             | .raw.value
-        ) as $lbas
-        | select($lbas != null and .logical_block_size != null)
-        | ($lbas * .logical_block_size) / 1e12;
+          ) as $lbas
+        | select($lbas != null and $root.logical_block_size != null)
+        | $lbas * $root.logical_block_size;
 
     if .device.protocol == "NVMe" then
-        nvme_tb
+        nvme_bytes
     else
-        sata_tb
+        sata_bytes
     end
-    | select(. != null)
-    | (. * 100 | round) / 100
-    ' <<< "$1"
+' <<< "$1"
 }
 
-get_bytes_written() {
-    jq -r '
-    if .device.protocol == "NVMe" then
-        .nvme_smart_health_information_log.data_units_written?
-        | select(. != null)
-        | . * 512000
-    else
-        (
-            .ata_smart_attributes.table[]?
-            | select(.name == "Total_LBAs_Written")
-            | .raw.value
-        ) as $lbas
-        | select($lbas != null and .logical_block_size != null)
-        | $lbas * .logical_block_size
-    end
-    ' <<< "$1"
-}
-
-get_type() {
+extract_protocol() {
     jq -r '.device.protocol' <<< "$1"
 }
 
+bytes_to_tb() {
+    local bytes="$1"
+    if [[ $ROUND -eq 1 ]]; then
+        awk -v b="$bytes" 'BEGIN { printf "%.2f", b/1e12 }'
+    else
+        awk -v b="$bytes" 'BEGIN { print b/1e12 }'
+    fi
+}
+
 # -----------------------
-# Option handling
+# Option parsing
 # -----------------------
 
-case "${1:-}" in
-    --help) usage; exit 0 ;;
-    --version) echo "tbw $VERSION"; exit 0 ;;
-esac
-
-while getopts "vhV" opt; do
-    case "$opt" in
-        v) VERBOSE=1 ;;
-        h) usage; exit 0 ;;
-        V) echo "tbw $VERSION"; exit 0 ;;
-        *) usage >&2; exit 1 ;;
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -v) VERBOSE=1 ;;
+        --bytes) OUTPUT_MODE="bytes" ;;
+        --json) OUTPUT_MODE="json" ;;
+        --exact) ROUND=0 ;;
+        -h|--help) usage; exit 0 ;;
+        -V|--version) echo "tbw $VERSION"; exit 0 ;;
+        --) shift; break ;;
+        -*) die "Unknown option: $1" ;;
+        *) break ;;
     esac
+    shift
 done
-shift $((OPTIND - 1))
 
-[[ -n "${1:-}" ]] || { usage >&2; exit 1; }
+[[ $# -ge 1 ]] || { usage >&2; exit 1; }
 
 # -----------------------
 # Validation
@@ -122,27 +136,64 @@ shift $((OPTIND - 1))
 require_root
 require_command smartctl
 require_command jq
-
-DEVICE=$(normalize_device "$1")
-[[ -e "$DEVICE" ]] || die "Device not found: $DEVICE"
-
-SMART_JSON=$(get_smart_json "$DEVICE")
-
-TB=$(calculate_tb "$SMART_JSON") || true
-[[ -n "$TB" ]] || die "Could not determine TBW for $DEVICE"
+require_command awk
 
 # -----------------------
-# Output
+# Processing
 # -----------------------
 
-if [[ $VERBOSE -eq 1 ]]; then
-    TYPE=$(get_type "$SMART_JSON")
-    BYTES=$(get_bytes_written "$SMART_JSON")
+EXIT_CODE=0
 
-    echo "Drive: $DEVICE"
-    echo "Type: $TYPE"
-    echo "Bytes written: $BYTES"
-    echo "Terabytes written: $TB TB"
-else
-    echo "$TB"
-fi
+for dev in "$@"; do
+    DEVICE=$(normalize_device "$dev")
+
+    if [[ ! -e "$DEVICE" ]]; then
+        echo "Error: Device not found: $DEVICE" >&2
+        EXIT_CODE=1
+        continue
+    fi
+
+    if ! SMART_JSON=$(get_smart_json "$DEVICE"); then
+        echo "Error: Failed to read SMART data from $DEVICE" >&2
+        EXIT_CODE=2
+        continue
+    fi
+
+    BYTES=$(extract_bytes "$SMART_JSON") || true
+
+    if [[ -z "${BYTES:-}" || "$BYTES" == "null" ]]; then
+        echo "Error: Could not determine TBW for $DEVICE" >&2
+        EXIT_CODE=3
+        continue
+    fi
+
+    PROTOCOL=$(extract_protocol "$SMART_JSON")
+
+    case "$OUTPUT_MODE" in
+        bytes)
+            echo "$BYTES"
+            ;;
+        tb)
+            TB=$(bytes_to_tb "$BYTES")
+            if [[ $VERBOSE -eq 1 ]]; then
+                echo "Drive: $DEVICE"
+                echo "Protocol: $PROTOCOL"
+                echo "Bytes written: $BYTES"
+                echo "Terabytes written: $TB"
+                echo
+            else
+                echo "$TB"
+            fi
+            ;;
+        json)
+            jq -n \
+                --arg device "$DEVICE" \
+                --arg protocol "$PROTOCOL" \
+                --argjson bytes "$BYTES" \
+                --argjson tb "$(awk -v b="$BYTES" 'BEGIN { print b/1e12 }')" \
+                '{device:$device, protocol:$protocol, bytes_written:$bytes, tb_written:$tb}'
+            ;;
+    esac
+done
+
+exit "$EXIT_CODE"
