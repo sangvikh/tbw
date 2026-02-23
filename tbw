@@ -58,11 +58,13 @@ parse_nvme_bytes() {
     local smart="$1"
 
     local units
-    units=$(awk -F: '/Data Units Written/ {gsub(/[, ]/,"",$2); print $2; exit}' <<< "$smart")
+    units=$(grep -i "Data Units Written" <<< "$smart" \
+            | grep -oE '[0-9]+' \
+            | head -n1)
 
-    [[ -n "$units" ]] || die "Could not read NVMe 'Data Units Written'"
+    [[ -n "$units" ]] || \
+        die "Could not parse NVMe Data Units Written"
 
-    # 1 data unit = 1000 * 512 bytes (per NVMe spec)
     echo $(( units * 512000 ))
 }
 
