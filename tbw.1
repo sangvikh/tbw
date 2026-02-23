@@ -1,0 +1,30 @@
+.\" Manpage for tbw
+.TH TBW 1 "2026-02-23" "5.1.0" "tbw manual"
+.SH NAME
+tbw \- calculate SSD Terabytes Written (TBW)
+.SH SYNOPSIS
+tbw [--bytes] [-v] <device>...
+.SH DESCRIPTION
+`tbw` reads SMART data from SATA and NVMe drives and calculates total bytes written (TBW).
+Default output is decimal terabytes (TB). Use `--bytes` for raw bytes.
+.SH OPTIONS
+.TP
+--bytes
+Output raw bytes written instead of TB
+.TP
+-v
+Verbose output: shows device, type, bytes, and TB
+.TP
+-h, --help
+Show help
+.TP
+-V
+Show version
+.SH EXAMPLES
+tbw sda
+tbw --bytes /dev/nvme0n1
+tbw -v sda nvme0n1
+.SH SEE ALSO
+smartctl(8), jq(1)
+.SH AUTHOR
+Written by sangvikh
