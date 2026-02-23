@@ -1,148 +1,129 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="3.0.0"
+VERSION="5.1.0"
+
+# -----------------------
+# Defaults
+# -----------------------
+MODE="tb"    # tb | bytes
 VERBOSE=0
 
 usage() {
 cat <<EOF
-tbw - Calculate SSD Terabytes Written (TBW) from SMART data
+tbw - Extract total bytes written (TBW) from SSDs
 
 Usage:
-  tbw [options] <device>
+  tbw [options] <device> [device...]
 
 Options:
-  -v            Verbose output
+  --bytes       Output raw bytes written instead of TB
+  -v            Verbose output (device info, bytes, TB)
   -h, --help    Show this help
-  -V, --version Show version
+  -V            Show version
 
 Examples:
   sudo tbw sda
-  sudo tbw /dev/nvme0n1
-  sudo tbw -v sda
+  sudo tbw --bytes /dev/nvme0n1
 EOF
 }
 
-die() {
-    echo "Error: $*" >&2
-    exit 1
+die() { echo "Error: $*" >&2; exit 1; }
+require_root() { [[ $EUID -eq 0 ]] || die "Run as root."; }
+require_cmd() { command -v "$1" >/dev/null || die "$1 not found."; }
+
+normalize() {
+    [[ "$1" == /dev/* ]] && echo "$1" || echo "/dev/$1"
 }
 
-require_root() {
-    [[ $EUID -eq 0 ]] || die "Run as root (sudo)."
-}
-
-require_command() {
-    command -v "$1" >/dev/null 2>&1 || \
-        die "$1 not found. Please install it."
-}
-
-normalize_device() {
-    local input="$1"
-    [[ "$input" == /dev/* ]] && echo "$input" || echo "/dev/$input"
-}
-
-get_smart_json() {
+get_json() {
     smartctl -a -j "$1" 2>/dev/null || true
 }
 
-calculate_tb() {
-    jq -r '
-    def nvme_tb:
+extract_bytes() {
+jq -r '
+    def nvme:
         .nvme_smart_health_information_log.data_units_written?
         | select(. != null)
-        | (. * 512000) / 1e12;
+        | . * 512000;
 
-    def sata_tb:
-        (
-            .ata_smart_attributes.table[]?
-            | select(.id == 241 or .id == 242)
+    def sata:
+        . as $r
+        | (
+            $r.ata_smart_attributes.table[]?
+            | select(.name == "Total_LBAs_Written" or .id == 241)
             | .raw.value
-        ) as $lbas
-        | select($lbas != null and .logical_block_size != null)
-        | ($lbas * .logical_block_size) / 1e12;
+          ) as $l
+        | select($l != null and $r.logical_block_size != null)
+        | $l * $r.logical_block_size;
 
-    if .device.protocol == "NVMe" then
-        nvme_tb
-    else
-        sata_tb
-    end
-    | select(. != null)
-    | (. * 100 | round) / 100
-    ' <<< "$1"
-}
-
-get_bytes_written() {
-    jq -r '
-    if .device.protocol == "NVMe" then
-        .nvme_smart_health_information_log.data_units_written?
-        | select(. != null)
-        | . * 512000
-    else
-        (
-            .ata_smart_attributes.table[]?
-            | select(.name == "Total_LBAs_Written")
-            | .raw.value
-        ) as $lbas
-        | select($lbas != null and .logical_block_size != null)
-        | $lbas * .logical_block_size
-    end
-    ' <<< "$1"
-}
-
-get_type() {
-    jq -r '.device.protocol' <<< "$1"
+    if .device.protocol == "NVMe" then nvme else sata end
+' <<< "$1"
 }
 
 # -----------------------
-# Option handling
+# Options
 # -----------------------
-
-case "${1:-}" in
-    --help) usage; exit 0 ;;
-    --version) echo "tbw $VERSION"; exit 0 ;;
-esac
-
-while getopts "vhV" opt; do
-    case "$opt" in
-        v) VERBOSE=1 ;;
-        h) usage; exit 0 ;;
-        V) echo "tbw $VERSION"; exit 0 ;;
-        *) usage >&2; exit 1 ;;
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --bytes) MODE="bytes" ;;
+        -v) VERBOSE=1 ;;
+        -h|--help) usage; exit 0 ;;
+        -V) echo "tbw $VERSION"; exit 0 ;;
+        -*) die "Unknown option: $1" ;;
+        *) break ;;
     esac
+    shift
 done
-shift $((OPTIND - 1))
 
-[[ -n "${1:-}" ]] || { usage >&2; exit 1; }
-
-# -----------------------
-# Validation
-# -----------------------
+[[ $# -ge 1 ]] || { usage >&2; exit 1; }
 
 require_root
-require_command smartctl
-require_command jq
+require_cmd smartctl
+require_cmd jq
 
-DEVICE=$(normalize_device "$1")
-[[ -e "$DEVICE" ]] || die "Device not found: $DEVICE"
-
-SMART_JSON=$(get_smart_json "$DEVICE")
-
-TB=$(calculate_tb "$SMART_JSON") || true
-[[ -n "$TB" ]] || die "Could not determine TBW for $DEVICE"
+EXIT=0
 
 # -----------------------
-# Output
+# Process devices
 # -----------------------
+for dev in "$@"; do
+    DEV=$(normalize "$dev")
+    if [[ ! -e "$DEV" ]]; then
+        echo "Device not found: $DEV" >&2
+        EXIT=1
+        continue
+    fi
 
-if [[ $VERBOSE -eq 1 ]]; then
-    TYPE=$(get_type "$SMART_JSON")
-    BYTES=$(get_bytes_written "$SMART_JSON")
+    JSON=$(get_json "$DEV")
+    if [[ -z "$JSON" ]]; then
+        echo "SMART read failed: $DEV" >&2
+        EXIT=2
+        continue
+    fi
 
-    echo "Drive: $DEVICE"
-    echo "Type: $TYPE"
-    echo "Bytes written: $BYTES"
-    echo "Terabytes written: $TB TB"
-else
-    echo "$TB"
-fi
+    BYTES=$(extract_bytes "$JSON")
+    if [[ -z "$BYTES" || "$BYTES" == "null" ]]; then
+        echo "TBW not available: $DEV" >&2
+        EXIT=3
+        continue
+    fi
+
+    TB=$(jq -n --argjson b "$BYTES" '($b / 1e12 * 100 | round)/100')
+
+    if [[ $VERBOSE -eq 1 ]]; then
+        PROTO=$(jq -r '.device.protocol' <<< "$JSON")
+        echo "Drive: $DEV"
+        echo "Type: $PROTO"
+        echo "Bytes written: $BYTES"
+        echo "Terabytes written: $TB TB"
+    else
+        if [[ "$MODE" == "bytes" ]]; then
+            echo "$BYTES"
+        else
+            echo "$TB"
+        fi
+    fi
+done
+
+exit "$EXIT"

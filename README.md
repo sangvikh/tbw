@@ -1,22 +1,22 @@
 # tbw
 
 A small Unix-style utility that calculates **Terabytes Written (TBW)**
-for SATA and NVMe drives using `smartctl` JSON output.
+for SATA and NVMe drives using `smartctl`.
 
-It prints a machine-friendly numeric value by default, making it ideal
-for scripting and monitoring.
+It prints clean, pipe-friendly numeric output by default, making it ideal
+for scripting, monitoring, and logging SSD write life.
 
 ------------------------------------------------------------------------
 
 ## Features
 
--   Supports SATA (`Total_LBAs_Written`)
--   Supports NVMe (`data_units_written`)
--   Uses `smartctl -a -j` (JSON parsing, robust & future-proof)
--   Clean pipe-friendly output
--   Optional verbose mode (`-v`)
--   No embedded sudo (run as root explicitly)
--   Minimal dependencies
+-   Supports SATA (`Total_LBAs_Written`) and NVMe (`data_units_written`)
+-   Reads SMART data via `smartctl -a -j`
+-   Optional `--bytes` mode for raw numeric bytes (script-friendly)
+-   Optional `-v` verbose mode for human-friendly output (device, type, bytes, TB)  
+-   Minimal dependencies (`smartctl`, `jq`)
+-   Requires root privileges (run with `sudo`)
+-   Follows Unix philosophy: single responsibility, composable, minimal interface
 
 ------------------------------------------------------------------------
 
@@ -25,7 +25,7 @@ for scripting and monitoring.
 -   Linux
 -   smartmontools (`smartctl`)
 -   `jq`
--   Root privileges (required by smartctl)
+-   Root privileges
 
 Install dependencies:
 
@@ -63,13 +63,21 @@ The result is converted to **decimal terabytes (TB)**:
 
 ## Usage
 
-Basic (machine-friendly output):
+Basic (TB, human-friendly):
 
     sudo ./tbw sda
 
 Output:
 
     37.41
+
+Raw bytes (script-friendly):
+
+    sudo ./tbw --bytes /dev/nvme0n1
+
+Output:
+
+    37415580000000
 
 Verbose mode:
 
@@ -81,6 +89,10 @@ Example verbose output:
     Type: SATA
     Bytes written: 37408157962240
     Terabytes written: 37.41 TB
+
+Multiple devices:
+
+    sudo ./tbw sda nvme0n1
 
 ------------------------------------------------------------------------
 
@@ -102,6 +114,31 @@ Scan all drives:
 
 ------------------------------------------------------------------------
 
+## Installation
+
+1. Copy the script to `/usr/local/bin`:
+
+    ```
+    sudo cp tbw /usr/local/bin/
+    sudo chmod +x /usr/local/bin/tbw
+    ```
+2. Add a man page (optional, see below) for `man tbw` support.
+
+------------------------------------------------------------------------
+
+### Man Page (Optional)
+
+Install the man page:
+
+    sudo cp tbw.1 /usr/local/share/man/man1/
+    sudo mandb
+
+Test:
+
+    man tbw
+
+------------------------------------------------------------------------
+
 ## Design Philosophy
 
 `tbw` follows Unix principles:
@@ -117,8 +154,8 @@ Scan all drives:
 
 ## Version
 
-Current version: **3.0.0**\
-(JSON-based implementation)
+Current version: 5.1.0
+(Minimal, TB-first implementation)
 
 ------------------------------------------------------------------------
 
