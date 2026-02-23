@@ -7,6 +7,7 @@ VERSION="5.1.0"
 # Defaults
 # -----------------------
 MODE="tb"    # tb | bytes
+VERBOSE=0
 
 usage() {
 cat <<EOF
@@ -16,9 +17,10 @@ Usage:
   tbw [options] <device> [device...]
 
 Options:
-  --bytes     Output raw bytes written instead of TB
-  -h, --help  Show this help
-  -V          Show version
+  --bytes       Output raw bytes written instead of TB
+  -v            Verbose output (device info, bytes, TB)
+  -h, --help    Show this help
+  -V            Show version
 
 Examples:
   sudo tbw sda
@@ -27,7 +29,6 @@ EOF
 }
 
 die() { echo "Error: $*" >&2; exit 1; }
-
 require_root() { [[ $EUID -eq 0 ]] || die "Run as root."; }
 require_cmd() { command -v "$1" >/dev/null || die "$1 not found."; }
 
@@ -66,6 +67,7 @@ jq -r '
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --bytes) MODE="bytes" ;;
+        -v) VERBOSE=1 ;;
         -h|--help) usage; exit 0 ;;
         -V) echo "tbw $VERSION"; exit 0 ;;
         -*) die "Unknown option: $1" ;;
@@ -107,10 +109,20 @@ for dev in "$@"; do
         continue
     fi
 
-    if [[ "$MODE" == "bytes" ]]; then
-        echo "$BYTES"
+    TB=$(jq -n --argjson b "$BYTES" '($b / 1e12 * 100 | round)/100')
+
+    if [[ $VERBOSE -eq 1 ]]; then
+        PROTO=$(jq -r '.device.protocol' <<< "$JSON")
+        echo "Drive: $DEV"
+        echo "Type: $PROTO"
+        echo "Bytes written: $BYTES"
+        echo "Terabytes written: $TB TB"
     else
-        jq -n --argjson b "$BYTES" '($b / 1e12 * 100 | round)/100'
+        if [[ "$MODE" == "bytes" ]]; then
+            echo "$BYTES"
+        else
+            echo "$TB"
+        fi
     fi
 done
 
