@@ -58,11 +58,23 @@ parse_nvme_bytes() {
     local smart="$1"
 
     local units
-    units=$(grep -i "Data Units Written" <<< "$smart" \
-            | grep -oE '[0-9]+' \
-            | head -n1)
+    units=$(awk '
+        /Data Units Written/ {
+            # Everything after the colon
+            sub(/.*:/, "", $0)
 
-    [[ -n "$units" ]] || \
+            # Remove bracket part
+            sub(/\[.*/, "", $0)
+
+            # Remove all spaces
+            gsub(/[[:space:]]/, "", $0)
+
+            print
+            exit
+        }
+    ' <<< "$smart")
+
+    [[ "$units" =~ ^[0-9]+$ ]] || \
         die "Could not parse NVMe Data Units Written"
 
     awk -v u="$units" 'BEGIN {printf "%.0f\n", u * 512000}'
