@@ -43,8 +43,7 @@ normalize_device() {
 }
 
 get_smart_json() {
-    smartctl -a -j "$1" 2>/dev/null || \
-        die "Failed to read SMART data from $1"
+    smartctl -a -j "$1" 2>/dev/null || true
 }
 
 calculate_tb() {
