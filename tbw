@@ -57,7 +57,7 @@ calculate_tb() {
     def sata_tb:
         (
             .ata_smart_attributes.table[]?
-            | select(.name == "Total_LBAs_Written")
+            | select(.id == 241 or .id == 242)
             | .raw.value
         ) as $lbas
         | select($lbas != null and .logical_block_size != null)
