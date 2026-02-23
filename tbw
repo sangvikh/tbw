@@ -190,8 +190,13 @@ for dev in "$@"; do
                 --arg device "$DEVICE" \
                 --arg protocol "$PROTOCOL" \
                 --argjson bytes "$BYTES" \
-                --argjson tb "$(awk -v b="$BYTES" 'BEGIN { print b/1e12 }')" \
-                '{device:$device, protocol:$protocol, bytes_written:$bytes, tb_written:$tb}'
+                '
+                {
+                    device: $device,
+                    protocol: $protocol,
+                    bytes_written: $bytes,
+                    tb_written: ($bytes / 1e12)
+                }'
             ;;
     esac
 done
