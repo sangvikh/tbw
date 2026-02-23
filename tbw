@@ -74,14 +74,14 @@ calculate_tb() {
         sata_tb
     end
     | select(. != null)
-    | @sprintf("%.2f", .)
+    | sprintf("%.2f"; .)
     ' <<< "$1"
 }
 
 get_bytes_written() {
     jq -r '
     if .device.protocol == "NVMe" then
-        .nvme_smart_health_information_log.data_units_written
+        .nvme_smart_health_information_log.data_units_written?
         | select(. != null)
         | . * 512000
     else
