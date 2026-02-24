@@ -37,7 +37,6 @@ normalize() {
 
 get_json() {
     smartctl -a -j "$1" 2>/dev/null
-    return $?
 }
 
 extract_bytes() {
@@ -94,11 +93,13 @@ for dev in "$@"; do
         continue
     fi
 
-    JSON=$(get_json "$DEV")
-    RC=$?
-
-    if (( RC & 2 )); then
-        echo "Permission denied reading SMART data: $DEV (try sudo)" >&2
+    if ! JSON=$(get_json "$DEV"); then
+        RC=$?
+        if (( RC & 2 )); then
+            echo "Permission denied: $DEV (try sudo)" >&2
+        else
+            echo "SMART read failed: $DEV" >&2
+        fi
         EXIT=2
         continue
     fi
