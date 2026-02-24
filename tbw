@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 
 VERSION="5.1.0"
 
@@ -93,13 +93,11 @@ for dev in "$@"; do
         continue
     fi
 
-    set +e
     JSON=$(get_json "$DEV")
     RC=$?
-    set -e
 
     if (( RC & 2 )); then
-        echo "Permission denied reading SMART data: $DEV (try sudo)" >&2
+        echo "Cannot access SMART data on $DEV (try sudo)" >&2
         EXIT=2
         continue
     fi
