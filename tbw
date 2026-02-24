@@ -36,7 +36,7 @@ normalize() {
 }
 
 get_json() {
-    smartctl -a -j "$1" 2>/dev/null || true
+    smartctl -a -j "$1" 2>/dev/null
 }
 
 extract_bytes() {
@@ -93,12 +93,12 @@ for dev in "$@"; do
         continue
     fi
 
-    JSON=$(get_json "$DEV")
-    if [[ -z "$JSON" ]]; then
-        echo "SMART read failed: $DEV (Check permissions or device existence)" >&2
-        EXIT=2
-        continue
-    fi
+    if ! JSON=$(get_json "$DEV"); then
+        if [[ -z "$JSON" ]]; then
+            echo "SMART read failed: $DEV (Permission denied or device error)" >&2
+            EXIT=2
+            continue
+        fi
 
     BYTES=$(extract_bytes "$JSON")
     if [[ -z "$BYTES" || "$BYTES" == "null" ]]; then
