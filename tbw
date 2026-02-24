@@ -29,7 +29,6 @@ EOF
 }
 
 die() { echo "Error: $*" >&2; exit 1; }
-require_root() { [[ $EUID -eq 0 ]] || die "Run as root."; }
 require_cmd() { command -v "$1" >/dev/null || die "$1 not found."; }
 
 normalize() {
@@ -78,7 +77,6 @@ done
 
 [[ $# -ge 1 ]] || { usage >&2; exit 1; }
 
-require_root
 require_cmd smartctl
 require_cmd jq
 
@@ -97,7 +95,7 @@ for dev in "$@"; do
 
     JSON=$(get_json "$DEV")
     if [[ -z "$JSON" ]]; then
-        echo "SMART read failed: $DEV" >&2
+        echo "SMART read failed: $DEV (Check permissions or device existence)" >&2
         EXIT=2
         continue
     fi

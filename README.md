@@ -15,7 +15,7 @@ for scripting, monitoring, and logging SSD write life.
 -   Optional `--bytes` mode for raw numeric bytes (script-friendly)
 -   Optional `-v` verbose mode for human-friendly output (device, type, bytes, TB)  
 -   Minimal dependencies (`smartctl`, `jq`)
--   Requires root privileges (run with `sudo`)
+-    **No forced root check** (runs as long as `smartctl` has access)
 -   Follows Unix philosophy: single responsibility, composable, minimal interface
 
 ------------------------------------------------------------------------
@@ -25,8 +25,7 @@ for scripting, monitoring, and logging SSD write life.
 -   Linux
 -   smartmontools (`smartctl`)
 -   `jq`
--   Root privileges
-
+-   **Hardware Access** (usually requires `sudo` or root, but works if user has disk group/capabilities)
 Install dependencies:
 
 ### Debian / Ubuntu
