@@ -99,6 +99,7 @@ for dev in "$@"; do
             EXIT=2
             continue
         fi
+    fi
 
     BYTES=$(extract_bytes "$JSON")
     if [[ -z "$BYTES" || "$BYTES" == "null" ]]; then
